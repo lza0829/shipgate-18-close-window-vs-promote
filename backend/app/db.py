@@ -53,6 +53,22 @@ CREATE TABLE IF NOT EXISTS promote_events (
   decision TEXT NOT NULL CHECK(decision IN ('放行','拒绝')),
   created_at TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
+  txn_id INTEGER,
+  FOREIGN KEY(release_id) REFERENCES releases(id),
+  FOREIGN KEY(from_env_id) REFERENCES environments(id),
+  FOREIGN KEY(to_env_id) REFERENCES environments(id)
+);
+CREATE TABLE IF NOT EXISTS promote_txns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  release_id INTEGER NOT NULL,
+  from_env_id INTEGER,
+  to_env_id INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT '进行中' CHECK(state IN ('进行中','已落成','已切断')),
+  gate_window_id INTEGER,
+  cut_by_window_id INTEGER,
+  entered_at TEXT NOT NULL,
+  decided_at TEXT,
+  note TEXT NOT NULL DEFAULT '',
   FOREIGN KEY(release_id) REFERENCES releases(id),
   FOREIGN KEY(from_env_id) REFERENCES environments(id),
   FOREIGN KEY(to_env_id) REFERENCES environments(id)
@@ -63,6 +79,7 @@ CREATE TABLE IF NOT EXISTS release_windows (
   open_at TEXT NOT NULL,
   close_at TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT '窗开' CHECK(status IN ('窗开','窗关')),
+  closed_at TEXT,
   FOREIGN KEY(env_id) REFERENCES environments(id)
 );
 CREATE TABLE IF NOT EXISTS rollback_windows (
@@ -103,24 +120,32 @@ RELEASE_STATUSES = ("待入闸", "已入闸", "晋升中", "已放行", "回滚�
 PIPELINE_STATUSES = ("未回执", "绿", "红")
 HEALTH_STATUSES = ("探针绿", "探针红")
 WINDOW_STATUSES = ("窗开", "窗关")
+TXN_STATUSES = ("进行中", "已落成", "已切断")
 
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
 @contextmanager
-def db():
+def db(immediate: bool = False):
+    """事务上下文。immediate=True 时 BEGIN IMMEDIATE，进事务即持写锁，
+    使关闸与晋升事务袋等争用写口在库级串行化，谁先提交谁生效。"""
     conn = connect()
+    begun = False
     try:
+        conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        begun = True
         yield conn
         conn.commit()
     except Exception:
-        conn.rollback()
+        if begun:
+            conn.rollback()
         raise
     finally:
         conn.close()
@@ -128,7 +153,20 @@ def db():
 
 def init_db() -> None:
     with db() as conn:
-        conn.executescript(SCHEMA)
+        # 整卷一个事务：避免逐语句自动提交拖慢建库
+        conn.executescript("BEGIN;\n" + SCHEMA + "\nCOMMIT;")
+    migrate()
+
+
+def migrate() -> None:
+    """老库补列：关闸提交戳、放行事件所属事务袋。"""
+    with db() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(release_windows)").fetchall()}
+        if "closed_at" not in cols:
+            conn.execute("ALTER TABLE release_windows ADD COLUMN closed_at TEXT")
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(promote_events)").fetchall()}
+        if "txn_id" not in cols:
+            conn.execute("ALTER TABLE promote_events ADD COLUMN txn_id INTEGER")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:

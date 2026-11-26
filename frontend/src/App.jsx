@@ -10,6 +10,7 @@ import Health from './pages/Health'
 import Reconcile from './pages/Reconcile'
 import Settings from './pages/Settings'
 import Audit from './pages/Audit'
+import Fixture from './pages/Fixture'
 
 const links = [
   ['/', '总览'],
@@ -22,6 +23,7 @@ const links = [
   ['/对账', '对账'],
   ['/设置', '设置'],
   ['/审计', '审计'],
+  ['/夹具', '夹具'],
 ]
 
 export default function App() {
@@ -52,6 +54,7 @@ export default function App() {
           <Route path="/对账" element={<Reconcile />} />
           <Route path="/设置" element={<Settings />} />
           <Route path="/审计" element={<Audit />} />
+          <Route path="/夹具" element={<Fixture />} />
         </Routes>
       </main>
     </div>

@@ -7,6 +7,7 @@ from app.routers import (
     audit,
     dashboard,
     environments,
+    fixture,
     health,
     promote,
     reconcile,
@@ -33,6 +34,7 @@ for mod in (
     reconcile,
     settings,
     audit,
+    fixture,
 ):
     app.include_router(mod.router, prefix="/api")
 
